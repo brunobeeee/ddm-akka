@@ -20,6 +20,7 @@ import lombok.NoArgsConstructor;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
@@ -69,7 +70,7 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	public static class CompletionMessage implements Message {
 		private static final long serialVersionUID = -7642425159675583598L;
 		ActorRef<DependencyWorker.Message> dependencyWorker;
-		int result;
+		List<List<String[]>> result;
 	}
 
 	////////////////////////
@@ -90,6 +91,8 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		this.inputFiles = InputConfigurationSingleton.get().getInputFiles();
 		this.headerLines = new String[this.inputFiles.length][];
 
+		this.batches = new ArrayList<>();
+
 		this.inputReaders = new ArrayList<>(inputFiles.length);
 		for (int id = 0; id < this.inputFiles.length; id++)
 			this.inputReaders.add(context.spawn(InputReader.create(id, this.inputFiles[id]), InputReader.DEFAULT_NAME + "_" + id));
@@ -108,8 +111,10 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	private long startTime;
 
 	private final boolean discoverNaryDependencies;
+	
 	private final File[] inputFiles;
 	private final String[][] headerLines;
+	private List<List<String[]>> batches;
 
 	private final List<ActorRef<InputReader.Message>> inputReaders;
 	private final ActorRef<ResultCollector.Message> resultCollector;
@@ -144,14 +149,16 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 
 	private Behavior<Message> handle(HeaderMessage message) {
 		this.headerLines[message.getId()] = message.getHeader();
+		//for (String[] headerLine : this.headerLines)
+		//	System.out.println(Arrays.toString(headerLine));
 		return this;
 	}
 
 	private Behavior<Message> handle(BatchMessage message) {
-		// Ignoring batch content for now ... but I could do so much with it.
+		this.batches.add(message.getBatch());
 
-		if (message.getBatch().size() != 0)
-			this.inputReaders.get(message.getId()).tell(new InputReader.ReadBatchMessage(this.getContext().getSelf()));
+		//if (message.getBatch().size() != 0)
+		//	this.inputReaders.get(message.getId()).tell(new InputReader.ReadBatchMessage(this.getContext().getSelf()));
 		return this;
 	}
 
@@ -160,10 +167,10 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		if (!this.dependencyWorkers.contains(dependencyWorker)) {
 			this.dependencyWorkers.add(dependencyWorker);
 			this.getContext().watch(dependencyWorker);
-			// The worker should get some work ... let me send her something before I figure out what I actually want from her.
-			// I probably need to idle the worker for a while, if I do not have work for it right now ... (see master/worker pattern)
 
-			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy, 42));
+			// Give the worker all the data
+			// For testing I just cut the data down
+			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy, batches.subList(0, 1)));
 		}
 		return this;
 	}
@@ -173,27 +180,27 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		// If this was a reasonable result, I would probably do something with it and potentially generate more work ... for now, let's just generate a random, binary IND.
 
 		if (this.headerLines[0] != null) {
-			Random random = new Random();
-			int dependent = random.nextInt(this.inputFiles.length);
-			int referenced = random.nextInt(this.inputFiles.length);
+			int dependent = 0;
+			int referenced = 0;
 			File dependentFile = this.inputFiles[dependent];
 			File referencedFile = this.inputFiles[referenced];
-			String[] dependentAttributes = {this.headerLines[dependent][random.nextInt(this.headerLines[dependent].length)], this.headerLines[dependent][random.nextInt(this.headerLines[dependent].length)]};
-			String[] referencedAttributes = {this.headerLines[referenced][random.nextInt(this.headerLines[referenced].length)], this.headerLines[referenced][random.nextInt(this.headerLines[referenced].length)]};
+			String[] dependentAttributes = {this.headerLines[dependent][0], this.headerLines[dependent][0]};
+			String[] referencedAttributes = {this.headerLines[referenced][0], this.headerLines[referenced][0]};
 			InclusionDependency ind = new InclusionDependency(dependentFile, dependentAttributes, referencedFile, referencedAttributes);
-			List<InclusionDependency> inds = new ArrayList<>(1);
+			List<InclusionDependency> inds = new ArrayList<>(150);
 			inds.add(ind);
 
 			this.resultCollector.tell(new ResultCollector.ResultMessage(inds));
 		}
 		// I still don't know what task the worker could help me to solve ... but let me keep her busy.
 		// Once I found all unary INDs, I could check if this.discoverNaryDependencies is set to true and try to detect n-ary INDs as well!
-
-		dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy, 42));
+		// dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy, batches));
 
 		// At some point, I am done with the discovery. That is when I should call my end method. Because I do not work on a completable task yet, I simply call it after some time.
-		if (System.currentTimeMillis() - this.startTime > 2000000)
-			this.end();
+		//if (System.currentTimeMillis() - this.startTime > 2000000)
+		//	this.end();
+
+		this.end();
 		return this;
 	}
 
@@ -206,6 +213,7 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	private Behavior<Message> handle(Terminated signal) {
 		ActorRef<DependencyWorker.Message> dependencyWorker = signal.getRef().unsafeUpcast();
 		this.dependencyWorkers.remove(dependencyWorker);
+
 		return this;
 	}
 }

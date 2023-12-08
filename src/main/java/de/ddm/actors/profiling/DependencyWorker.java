@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 
 import java.util.Random;
 import java.util.Set;
+import java.util.List;
 
 public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message> {
 
@@ -39,7 +40,7 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	public static class TaskMessage implements Message {
 		private static final long serialVersionUID = -4667745204456518160L;
 		ActorRef<LargeMessageProxy.Message> dependencyMinerLargeMessageProxy;
-		int task;
+		List<List<String[]>> task;
 	}
 
 	////////////////////////
@@ -87,15 +88,17 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	}
 
 	private Behavior<Message> handle(TaskMessage message) {
-		this.getContext().getLog().info("Working!");
-		// I should probably know how to solve this task, but for now I just pretend some work...
+		this.getContext().getLog().info("Recieved data!");
 
-		int result = message.getTask();
-		long time = System.currentTimeMillis();
-		Random rand = new Random();
-		int runtime = (rand.nextInt(2) + 2) * 1000;
-		while (System.currentTimeMillis() - time < runtime)
-			result = ((int) Math.abs(Math.sqrt(result)) * result) % 1334525;
+		List<List<String[]>> result = message.getTask();
+		//for (List<String[]> item : result)
+		//	for (String[] array : item) {
+		//		for (String str : array) {
+		//			System.out.println(str);
+		//		}
+		//	}
+
+		// Solve the task
 
 		LargeMessageProxy.LargeMessage completionMessage = new DependencyMiner.CompletionMessage(this.getContext().getSelf(), result);
 		this.largeMessageProxy.tell(new LargeMessageProxy.SendMessage(completionMessage, message.getDependencyMinerLargeMessageProxy()));
