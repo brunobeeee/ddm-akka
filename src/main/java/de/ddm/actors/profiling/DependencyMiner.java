@@ -70,7 +70,9 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	public static class CompletionMessage implements Message {
 		private static final long serialVersionUID = -7642425159675583598L;
 		ActorRef<DependencyWorker.Message> dependencyWorker;
-		List<List<String[]>> result;
+		List<List<Integer>> result;
+		int sourceFileIndex;
+		int targetFileIndex;
 	}
 
 	////////////////////////
@@ -91,7 +93,11 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		this.inputFiles = InputConfigurationSingleton.get().getInputFiles();
 		this.headerLines = new String[this.inputFiles.length][];
 
+		this.sourceFileIndex = 0;
+		this.targetFileIndex = 0;
+
 		this.batches = new ArrayList<>();
+		this.batchIds = new ArrayList<>();
 
 		this.inputReaders = new ArrayList<>(inputFiles.length);
 		for (int id = 0; id < this.inputFiles.length; id++)
@@ -114,7 +120,13 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	
 	private final File[] inputFiles;
 	private final String[][] headerLines;
+
 	private List<List<String[]>> batches;
+	private List<Integer> batchIds;
+
+	// Indexes to track wich file has to be compared to wich
+	private int sourceFileIndex;
+	private int targetFileIndex;
 
 	private final List<ActorRef<InputReader.Message>> inputReaders;
 	private final ActorRef<ResultCollector.Message> resultCollector;
@@ -149,16 +161,13 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 
 	private Behavior<Message> handle(HeaderMessage message) {
 		this.headerLines[message.getId()] = message.getHeader();
-		//for (String[] headerLine : this.headerLines)
-		//	System.out.println(Arrays.toString(headerLine));
 		return this;
 	}
 
 	private Behavior<Message> handle(BatchMessage message) {
 		this.batches.add(message.getBatch());
-
-		//if (message.getBatch().size() != 0)
-		//	this.inputReaders.get(message.getId()).tell(new InputReader.ReadBatchMessage(this.getContext().getSelf()));
+		this.batchIds.add(message.getId());
+		this.getContext().getLog().info("Recieved batch with first item  " + message.getBatch().get(0)[0] + " and id " + message.getId());
 		return this;
 	}
 
@@ -168,39 +177,82 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 			this.dependencyWorkers.add(dependencyWorker);
 			this.getContext().watch(dependencyWorker);
 
-			// Give the worker all the data
-			// For testing I just cut the data down
-			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy, batches.subList(0, 1)));
-		}
+			// Give the worke the sourceFile, targetFile and their indexes for tracking
+			this.sourceFileIndex = 0;
+			this.targetFileIndex = 0;
+			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
+																		batches.get(this.sourceFileIndex),
+																		batches.get(this.targetFileIndex),
+																		batchIds.get(this.sourceFileIndex),
+																		batchIds.get(this.targetFileIndex)));
+			}
 		return this;
 	}
 
 	private Behavior<Message> handle(CompletionMessage message) {
 		ActorRef<DependencyWorker.Message> dependencyWorker = message.getDependencyWorker();
-		// If this was a reasonable result, I would probably do something with it and potentially generate more work ... for now, let's just generate a random, binary IND.
+		List<List<Integer>> result = message.getResult();
+		int sourceBatchId = message.getSourceFileIndex();
+		int targetBatchId = message.getTargetFileIndex();
 
 		if (this.headerLines[0] != null) {
-			int dependent = 0;
-			int referenced = 0;
+			int dependent = sourceBatchId;
+			int referenced = targetBatchId;
+			this.getContext().getLog().info("int dependent: " + dependent);
+			this.getContext().getLog().info("int referenced: " + referenced);
 			File dependentFile = this.inputFiles[dependent];
 			File referencedFile = this.inputFiles[referenced];
-			String[] dependentAttributes = {this.headerLines[dependent][0], this.headerLines[dependent][0]};
-			String[] referencedAttributes = {this.headerLines[referenced][0], this.headerLines[referenced][0]};
-			InclusionDependency ind = new InclusionDependency(dependentFile, dependentAttributes, referencedFile, referencedAttributes);
-			List<InclusionDependency> inds = new ArrayList<>(150);
-			inds.add(ind);
+			List<InclusionDependency> inds = new ArrayList<>();
+
+			this.getContext().getLog().info(Arrays.toString(this.headerLines[dependent]));
+			this.getContext().getLog().info(Arrays.toString(this.headerLines[referenced]));
+			this.getContext().getLog().info("result.size " + result.size());
+
+			// Iterate over every column of the result and resolve the dependent and referenced headerlines
+			for (int i=0; i<result.size(); i++) {
+
+				if (result.get(i).isEmpty()) {
+					continue;
+				}
+				
+				List<String> referencedAttributesList = new ArrayList<>();
+				for (int index : result.get(i)) {
+					referencedAttributesList.add(this.headerLines[referenced][index]);
+				}
+
+				String[] dependentAttributes = {this.headerLines[dependent][i]};
+				// Convert to string-array
+				String[] referencedAttributes = referencedAttributesList.toArray(new String[0]);
+
+				// Write down inclusion dependency
+				InclusionDependency ind = new InclusionDependency(dependentFile, dependentAttributes, referencedFile, referencedAttributes);
+				inds.add(ind);
+			}
 
 			this.resultCollector.tell(new ResultCollector.ResultMessage(inds));
 		}
-		// I still don't know what task the worker could help me to solve ... but let me keep her busy.
-		// Once I found all unary INDs, I could check if this.discoverNaryDependencies is set to true and try to detect n-ary INDs as well!
-		// dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy, batches));
 
-		// At some point, I am done with the discovery. That is when I should call my end method. Because I do not work on a completable task yet, I simply call it after some time.
-		//if (System.currentTimeMillis() - this.startTime > 2000000)
-		//	this.end();
+		this.getContext().getLog().info("batches.size()  " + batches.size());
+		this.getContext().getLog().info("sourceFileIndex  " + this.sourceFileIndex);
+		this.getContext().getLog().info("targetFileIndex  " + this.targetFileIndex);
 
-		this.end();
+		this.targetFileIndex++;
+		if (this.targetFileIndex >= batches.size()) { // no more target files to read
+			this.targetFileIndex = 0;
+			this.sourceFileIndex++;
+		}
+
+		if (this.sourceFileIndex < batches.size()) {
+			this.getContext().getLog().info("-------------------");
+			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
+																	batches.get(this.sourceFileIndex),
+																	batches.get(targetFileIndex),
+																	batchIds.get(this.sourceFileIndex),
+																	batchIds.get(this.targetFileIndex)));
+		} else {
+			this.end();
+		}
+				
 		return this;
 	}
 

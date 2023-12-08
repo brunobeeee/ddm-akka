@@ -13,9 +13,10 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-import java.util.Random;
-import java.util.Set;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message> {
 
@@ -40,7 +41,10 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	public static class TaskMessage implements Message {
 		private static final long serialVersionUID = -4667745204456518160L;
 		ActorRef<LargeMessageProxy.Message> dependencyMinerLargeMessageProxy;
-		List<List<String[]>> task;
+		List<String[]> sourceFile;
+		List<String[]> targetFile;
+		int sourceFileIndex;
+		int targetFileIndex;
 	}
 
 	////////////////////////
@@ -88,21 +92,73 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	}
 
 	private Behavior<Message> handle(TaskMessage message) {
-		this.getContext().getLog().info("Recieved data!");
+		List<String[]> sourceFile = message.getSourceFile();
+		List<String[]> targetFile = message.getTargetFile();
+		int sourceFileIndex = message.getSourceFileIndex();
+		int targetFileIndex = message.getTargetFileIndex();
 
-		List<List<String[]>> result = message.getTask();
-		//for (List<String[]> item : result)
-		//	for (String[] array : item) {
-		//		for (String str : array) {
-		//			System.out.println(str);
-		//		}
-		//	}
+		this.getContext().getLog().info("Recieved sourceFile " + sourceFileIndex + " and targetFile " + targetFileIndex);
+		
+		List<List<Integer>> result = new ArrayList<>();
 
-		// Solve the task
+		// Reset the list as it gets reused over multiple messages
+		result = new ArrayList<>();
 
-		LargeMessageProxy.LargeMessage completionMessage = new DependencyMiner.CompletionMessage(this.getContext().getSelf(), result);
+		for (int i=0; i<sourceFile.get(0).length; i++) {
+			// Initialize a new list per sourceColumn that saves the indexes of the targetColumns it has inclusion dependencies to
+			// e.g. if col 2 (sourceFile) has a ind to col 4 (targetFile) then 4 gets added to the colIncIndexes on index 2 (sourceFile)
+			List<Integer> colIncIndexes = new ArrayList<>();
+
+			for (int j=0; j<targetFile.get(0).length; j++) {
+				if (i == j) {
+					// Do not compare columns with themselves
+					continue;
+				}
+
+				List<String> sourceColumn = getColumn(sourceFile, i);
+				List<String> targetColumn = getColumn(targetFile, j);
+
+				// True until an Element in sourceColumn cannot be found in targetColumn
+				boolean inclusionDependency = true;
+
+				for (String sourceElement : sourceColumn) {
+					// False until sourceElement gets found in targetColumn
+					boolean foundMatch = false;
+					for (String targetElement : targetColumn) {
+						if (sourceElement.equals(targetElement)) {
+							foundMatch = true;
+							break;
+						}
+					}
+
+					// If no match can be found there is no inclusion Dependency
+					if (!foundMatch) {
+						inclusionDependency = false;
+						break;
+					}
+				}
+				if (inclusionDependency) {
+					// Append the index of the targetColumn to signalize that sourceColumn has an inc to targetColumn
+					colIncIndexes.add(j);
+				}
+			}
+			result.add(colIncIndexes);
+		}
+
+		LargeMessageProxy.LargeMessage completionMessage = new DependencyMiner.CompletionMessage(this.getContext().getSelf(), result, sourceFileIndex, targetFileIndex);
 		this.largeMessageProxy.tell(new LargeMessageProxy.SendMessage(completionMessage, message.getDependencyMinerLargeMessageProxy()));
 
 		return this;
 	}
+
+	private List<String> getColumn(List<String[]> table, int index) {
+		List<String> result = new ArrayList<>();
+
+		for (int r = 0; r < table.size(); r++) {
+			result.add(table.get(r)[index]);
+		}
+
+		return result;
+	}
+
 }
