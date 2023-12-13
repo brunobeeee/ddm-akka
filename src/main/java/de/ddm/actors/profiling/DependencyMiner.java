@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 
 public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 
@@ -124,6 +125,10 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	private List<List<String[]>> batches;
 	private List<Integer> batchIds;
 
+	private int filesRead = 0;
+
+	private int resultsRecieved = 0;
+
 	// Indexes to track wich file has to be compared to wich
 	private int sourceFileIndex;
 	private int targetFileIndex;
@@ -165,9 +170,32 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	}
 
 	private Behavior<Message> handle(BatchMessage message) {
-		this.batches.add(message.getBatch());
-		this.batchIds.add(message.getId());
-		this.getContext().getLog().info("Recieved batch with first item  " + message.getBatch().get(0)[0] + " and id " + message.getId());
+		//this.getContext().getLog().info("Recieved batch with id " + message.getId());
+		//this.getContext().getLog().info("batch.size() " + message.getBatch().size());
+		
+		if (message.getBatch().size() != 0) {
+			this.batches.add(message.getBatch());
+			this.batchIds.add(message.getId());
+			this.inputReaders.get(message.getId()).tell(new InputReader.ReadBatchMessage(this.getContext().getSelf()));
+		} else {
+			filesRead += 1;
+			this.getContext().getLog().info(filesRead + " files read");
+
+			if (filesRead >= inputFiles.length) {
+				this.getContext().getLog().info("all files read");
+				this.getContext().getLog().info("==============");
+
+				// give every worker a task
+				for (ActorRef<DependencyWorker.Message> worker : this.dependencyWorkers) {
+					incFileIndexes();
+					worker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
+																	batches.get(this.sourceFileIndex),
+																	batches.get(this.targetFileIndex),
+																	batchIds.get(this.sourceFileIndex),
+																	batchIds.get(this.targetFileIndex)));
+				}
+			}
+		}
 		return this;
 	}
 
@@ -176,16 +204,13 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		if (!this.dependencyWorkers.contains(dependencyWorker)) {
 			this.dependencyWorkers.add(dependencyWorker);
 			this.getContext().watch(dependencyWorker);
+		}
 
-			// Give the worke the sourceFile, targetFile and their indexes for tracking
-			this.sourceFileIndex = 0;
-			this.targetFileIndex = 0;
-			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
-																		batches.get(this.sourceFileIndex),
-																		batches.get(this.targetFileIndex),
-																		batchIds.get(this.sourceFileIndex),
-																		batchIds.get(this.targetFileIndex)));
-			}
+		// Give worker the sourceFile, targetFile and their indexes for tracking
+		this.sourceFileIndex = 0;
+		this.targetFileIndex = -1; // has to start at -1 bc it gets incremented before the first taskMessage
+
+		// Worker will recieve its first taskMessage in handle(batchMessage)
 		return this;
 	}
 
@@ -198,15 +223,13 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		if (this.headerLines[0] != null) {
 			int dependent = sourceBatchId;
 			int referenced = targetBatchId;
-			this.getContext().getLog().info("int dependent: " + dependent);
-			this.getContext().getLog().info("int referenced: " + referenced);
 			File dependentFile = this.inputFiles[dependent];
 			File referencedFile = this.inputFiles[referenced];
 			List<InclusionDependency> inds = new ArrayList<>();
 
-			this.getContext().getLog().info(Arrays.toString(this.headerLines[dependent]));
-			this.getContext().getLog().info(Arrays.toString(this.headerLines[referenced]));
-			this.getContext().getLog().info("result.size " + result.size());
+			//this.getContext().getLog().info(Arrays.toString(this.headerLines[dependent]));
+			//this.getContext().getLog().info(Arrays.toString(this.headerLines[referenced]));
+			//this.getContext().getLog().info("result.size " + result.size());
 
 			// Iterate over every column of the result and resolve the dependent and referenced headerlines
 			for (int i=0; i<result.size(); i++) {
@@ -229,31 +252,38 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 				inds.add(ind);
 			}
 
-			this.resultCollector.tell(new ResultCollector.ResultMessage(inds));
+			if (inds.size() > 0)
+				this.resultCollector.tell(new ResultCollector.ResultMessage(inds));
 		}
 
-		this.getContext().getLog().info("batches.size()  " + batches.size());
-		this.getContext().getLog().info("sourceFileIndex  " + this.sourceFileIndex);
-		this.getContext().getLog().info("targetFileIndex  " + this.targetFileIndex);
+		this.getContext().getLog().info("Recieved result " + this.resultsRecieved + " from sourceFile  " + message.sourceFileIndex + " and targetFile " + message.targetFileIndex);
+		this.resultsRecieved++;
 
+		incFileIndexes();
+
+		// send new task if not done
+		if (this.sourceFileIndex < batches.size()) {
+			this.getContext().getLog().info("-------------------");
+			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
+																	batches.get(this.sourceFileIndex),
+																	batches.get(this.targetFileIndex),
+																	batchIds.get(this.sourceFileIndex),
+																	batchIds.get(this.targetFileIndex)));
+		}
+
+		// stopping condition
+		if (resultsRecieved >= batches.size()*batches.size())
+			this.end();
+		return this;
+	}
+
+	// increment the file indexes such that every file gets compared with every other file
+	private void incFileIndexes() {
 		this.targetFileIndex++;
 		if (this.targetFileIndex >= batches.size()) { // no more target files to read
 			this.targetFileIndex = 0;
 			this.sourceFileIndex++;
 		}
-
-		if (this.sourceFileIndex < batches.size()) {
-			this.getContext().getLog().info("-------------------");
-			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
-																	batches.get(this.sourceFileIndex),
-																	batches.get(targetFileIndex),
-																	batchIds.get(this.sourceFileIndex),
-																	batchIds.get(this.targetFileIndex)));
-		} else {
-			this.end();
-		}
-				
-		return this;
 	}
 
 	private void end() {

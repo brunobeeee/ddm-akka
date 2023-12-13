@@ -42,3 +42,5 @@ release.properties
 
 # Application files
 results.txt
+
+.DS_Store

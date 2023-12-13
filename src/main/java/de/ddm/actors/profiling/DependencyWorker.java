@@ -97,7 +97,7 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 		int sourceFileIndex = message.getSourceFileIndex();
 		int targetFileIndex = message.getTargetFileIndex();
 
-		this.getContext().getLog().info("Recieved sourceFile " + sourceFileIndex + " and targetFile " + targetFileIndex);
+		this.getContext().getLog().info("Working on sourceFile " + sourceFileIndex + " and targetFile " + targetFileIndex);
 		
 		List<List<Integer>> result = new ArrayList<>();
 
@@ -105,11 +105,13 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 		result = new ArrayList<>();
 
 		for (int i=0; i<sourceFile.get(0).length; i++) {
+			//System.out.println("SC: " + i);
 			// Initialize a new list per sourceColumn that saves the indexes of the targetColumns it has inclusion dependencies to
 			// e.g. if col 2 (sourceFile) has a ind to col 4 (targetFile) then 4 gets added to the colIncIndexes on index 2 (sourceFile)
 			List<Integer> colIncIndexes = new ArrayList<>();
 
 			for (int j=0; j<targetFile.get(0).length; j++) {
+				//System.out.println("TC: " + j);
 				if (i == j) {
 					// Do not compare columns with themselves
 					continue;
