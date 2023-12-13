@@ -104,21 +104,21 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 		// Reset the list as it gets reused over multiple messages
 		result = new ArrayList<>();
 
-		for (int i=0; i<sourceFile.get(0).length; i++) {
+		for (int i=0; i<sourceFile.size(); i++) {
 			//System.out.println("SC: " + i);
 			// Initialize a new list per sourceColumn that saves the indexes of the targetColumns it has inclusion dependencies to
-			// e.g. if col 2 (sourceFile) has a ind to col 4 (targetFile) then 4 gets added to the colIncIndexes on index 2 (sourceFile)
+			// e.g. if col 2 (sourceFile) has ind to col 4 (targetFile) then 4 gets added to the colIncIndexes on index 2 (sourceFile)
 			List<Integer> colIncIndexes = new ArrayList<>();
 
-			for (int j=0; j<targetFile.get(0).length; j++) {
+			for (int j=0; j<targetFile.size(); j++) {
 				//System.out.println("TC: " + j);
-				if (i == j) {
+				if (sourceFileIndex == targetFileIndex && i == j) {
 					// Do not compare columns with themselves
 					continue;
 				}
 
-				List<String> sourceColumn = getColumn(sourceFile, i);
-				List<String> targetColumn = getColumn(targetFile, j);
+				List<String> sourceColumn = Arrays.asList(sourceFile.get(i));
+				List<String> targetColumn = Arrays.asList(targetFile.get(j));
 
 				// True until an Element in sourceColumn cannot be found in targetColumn
 				boolean inclusionDependency = true;
@@ -151,16 +151,6 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 		this.largeMessageProxy.tell(new LargeMessageProxy.SendMessage(completionMessage, message.getDependencyMinerLargeMessageProxy()));
 
 		return this;
-	}
-
-	private List<String> getColumn(List<String[]> table, int index) {
-		List<String> result = new ArrayList<>();
-
-		for (int r = 0; r < table.size(); r++) {
-			result.add(table.get(r)[index]);
-		}
-
-		return result;
 	}
 
 }

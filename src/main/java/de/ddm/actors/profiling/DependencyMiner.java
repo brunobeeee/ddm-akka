@@ -174,7 +174,9 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		//this.getContext().getLog().info("batch.size() " + message.getBatch().size());
 		
 		if (message.getBatch().size() != 0) {
-			this.batches.add(message.getBatch());
+			// switch rows and cols in batch
+			this.batches.add(transposeMatrix(message.getBatch()));
+
 			this.batchIds.add(message.getId());
 			this.inputReaders.get(message.getId()).tell(new InputReader.ReadBatchMessage(this.getContext().getSelf()));
 		} else {
@@ -256,8 +258,9 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 				this.resultCollector.tell(new ResultCollector.ResultMessage(inds));
 		}
 
-		this.getContext().getLog().info("Recieved result " + this.resultsRecieved + " from sourceFile  " + message.sourceFileIndex + " and targetFile " + message.targetFileIndex);
 		this.resultsRecieved++;
+		this.getContext().getLog().info("Recieved result " + this.resultsRecieved + "/" + batches.size()*batches.size() + " from sourceFile " + message.sourceFileIndex + " and targetFile " + message.targetFileIndex);
+
 
 		incFileIndexes();
 
@@ -285,6 +288,23 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 			this.sourceFileIndex++;
 		}
 	}
+
+	public static List<String[]> transposeMatrix(List<String[]> matrix) {
+        int numRows = matrix.size();
+        int numCols = matrix.get(0).length;
+
+        String[][] transposedArray = new String[numCols][numRows];
+
+        for (int i = 0; i < numRows; i++) {
+            for (int j = 0; j < numCols; j++) {
+                transposedArray[j][i] = matrix.get(i)[j];
+            }
+        }
+
+        List<String[]> transposedMatrix = List.of(transposedArray);
+
+        return transposedMatrix;
+    }
 
 	private void end() {
 		this.resultCollector.tell(new ResultCollector.FinalizeMessage());
