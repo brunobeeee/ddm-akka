@@ -190,12 +190,15 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 				// give every worker a task
 				for (ActorRef<DependencyWorker.Message> worker : this.dependencyWorkers) {
 					incFileIndexes();
+					if (sourceFileIndex >= batches.size()) // #task < #workers
+						break;
 					worker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
 																	batches.get(this.sourceFileIndex),
 																	batches.get(this.targetFileIndex),
 																	batchIds.get(this.sourceFileIndex),
 																	batchIds.get(this.targetFileIndex)));
 				}
+
 			}
 		}
 		return this;
@@ -213,6 +216,15 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		this.targetFileIndex = -1; // has to start at -1 bc it gets incremented before the first taskMessage
 
 		// Worker will recieve its first taskMessage in handle(batchMessage)
+		// TODO remove this and uncomment the one in batchmessage
+		/**
+		incFileIndexes();
+		dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
+																	batches.get(this.sourceFileIndex),
+																	batches.get(this.targetFileIndex),
+																	batchIds.get(this.sourceFileIndex),
+																	batchIds.get(this.targetFileIndex)));
+		*/
 		return this;
 	}
 

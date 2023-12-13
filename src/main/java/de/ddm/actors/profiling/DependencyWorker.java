@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.HashSet;
 
 public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message> {
 
@@ -97,50 +98,26 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 		int sourceFileIndex = message.getSourceFileIndex();
 		int targetFileIndex = message.getTargetFileIndex();
 
-		this.getContext().getLog().info("Working on sourceFile " + sourceFileIndex + " and targetFile " + targetFileIndex);
-		
 		List<List<Integer>> result = new ArrayList<>();
 
-		// Reset the list as it gets reused over multiple messages
-		result = new ArrayList<>();
+		this.getContext().getLog().info("Working on sourceFile " + sourceFileIndex + " and targetFile " + targetFileIndex);
 
 		for (int i=0; i<sourceFile.size(); i++) {
-			//System.out.println("SC: " + i);
 			// Initialize a new list per sourceColumn that saves the indexes of the targetColumns it has inclusion dependencies to
 			// e.g. if col 2 (sourceFile) has ind to col 4 (targetFile) then 4 gets added to the colIncIndexes on index 2 (sourceFile)
 			List<Integer> colIncIndexes = new ArrayList<>();
 
 			for (int j=0; j<targetFile.size(); j++) {
-				//System.out.println("TC: " + j);
 				if (sourceFileIndex == targetFileIndex && i == j) {
 					// Do not compare columns with themselves
 					continue;
 				}
 
 				List<String> sourceColumn = Arrays.asList(sourceFile.get(i));
-				List<String> targetColumn = Arrays.asList(targetFile.get(j));
+				Set<String> targetColumn = new HashSet<>(Arrays.asList(targetFile.get(j))); // Directly convert to HashSet as we dont need the actual values anymore
 
-				// True until an Element in sourceColumn cannot be found in targetColumn
-				boolean inclusionDependency = true;
-
-				for (String sourceElement : sourceColumn) {
-					// False until sourceElement gets found in targetColumn
-					boolean foundMatch = false;
-					for (String targetElement : targetColumn) {
-						if (sourceElement.equals(targetElement)) {
-							foundMatch = true;
-							break;
-						}
-					}
-
-					// If no match can be found there is no inclusion Dependency
-					if (!foundMatch) {
-						inclusionDependency = false;
-						break;
-					}
-				}
-				if (inclusionDependency) {
-					// Append the index of the targetColumn to signalize that sourceColumn has an inc to targetColumn
+				if (isSubset(sourceColumn, targetColumn)) {
+					// Append the index of the targetColumn to signalize that sourceColumn has an IND to targetColumn
 					colIncIndexes.add(j);
 				}
 			}
@@ -152,5 +129,15 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 
 		return this;
 	}
+
+	public static boolean isSubset(List<String> list1, Set<String> list2) {
+        for (String element : list1) {
+            if (!list2.contains(element)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
 }
