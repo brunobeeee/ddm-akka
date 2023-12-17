@@ -22,6 +22,8 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
@@ -54,7 +56,7 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	public static class BatchMessage implements Message {
 		private static final long serialVersionUID = 4591192372652568030L;
 		int id;
-		List<String[]> batch;
+		List<Set<String>> batch;
 	}
 
 	@Getter
@@ -122,11 +124,11 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	private final File[] inputFiles;
 	private final String[][] headerLines;
 
-	private List<List<String[]>> batches;
+	private List<List<Set<String>>> batches;
 	private List<Integer> batchIds;
 
+	// Tracking and Logging
 	private int filesRead = 0;
-
 	private int resultsRecieved = 0;
 
 	// Indexes to track wich file has to be compared to wich
@@ -170,14 +172,22 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	}
 
 	private Behavior<Message> handle(BatchMessage message) {
-		//this.getContext().getLog().info("Recieved batch with id " + message.getId());
-		//this.getContext().getLog().info("batch.size() " + message.getBatch().size());
-		
+	
 		if (message.getBatch().size() != 0) {
-			// switch rows and cols in batch
-			this.batches.add(transposeMatrix(message.getBatch()));
 
-			this.batchIds.add(message.getId());
+
+			// Check if batchId already exists
+			int existingIndex = batchIds.indexOf(message.getId());
+
+			if (existingIndex != -1) { // merge new batch with existing one
+				List<Set<String>> existingBatch = this.batches.get(existingIndex);
+				List<Set<String>> mergedBatch = mergeBatches(existingBatch, message.getBatch());
+				this.batches.set(existingIndex, mergedBatch);
+			} else { // add new batch at the end
+				this.batches.add(message.getBatch());
+				this.batchIds.add(message.getId());
+			}
+
 			this.inputReaders.get(message.getId()).tell(new InputReader.ReadBatchMessage(this.getContext().getSelf()));
 		} else {
 			filesRead += 1;
@@ -192,6 +202,7 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 					incFileIndexes();
 					if (sourceFileIndex >= batches.size()) // #task < #workers
 						break;
+					
 					worker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
 																	batches.get(this.sourceFileIndex),
 																	batches.get(this.targetFileIndex),
@@ -216,15 +227,6 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		this.targetFileIndex = -1; // has to start at -1 bc it gets incremented before the first taskMessage
 
 		// Worker will recieve its first taskMessage in handle(batchMessage)
-		// TODO remove this and uncomment the one in batchmessage
-		/**
-		incFileIndexes();
-		dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
-																	batches.get(this.sourceFileIndex),
-																	batches.get(this.targetFileIndex),
-																	batchIds.get(this.sourceFileIndex),
-																	batchIds.get(this.targetFileIndex)));
-		*/
 		return this;
 	}
 
@@ -240,10 +242,6 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 			File dependentFile = this.inputFiles[dependent];
 			File referencedFile = this.inputFiles[referenced];
 			List<InclusionDependency> inds = new ArrayList<>();
-
-			//this.getContext().getLog().info(Arrays.toString(this.headerLines[dependent]));
-			//this.getContext().getLog().info(Arrays.toString(this.headerLines[referenced]));
-			//this.getContext().getLog().info("result.size " + result.size());
 
 			// Iterate over every column of the result and resolve the dependent and referenced headerlines
 			for (int i=0; i<result.size(); i++) {
@@ -301,21 +299,20 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		}
 	}
 
-	public static List<String[]> transposeMatrix(List<String[]> matrix) {
-        int numRows = matrix.size();
-        int numCols = matrix.get(0).length;
-
-        String[][] transposedArray = new String[numCols][numRows];
-
-        for (int i = 0; i < numRows; i++) {
-            for (int j = 0; j < numCols; j++) {
-                transposedArray[j][i] = matrix.get(i)[j];
-            }
+	public static List<Set<String>> mergeBatches(List<Set<String>> batch1, List<Set<String>> batch2) {
+        if (batch1.size() != batch2.size()) {
+            throw new IllegalArgumentException("Die Listen müssen die gleiche Größe haben.");
         }
 
-        List<String[]> transposedMatrix = List.of(transposedArray);
+        List<Set<String>> mergedList = new ArrayList<>();
 
-        return transposedMatrix;
+        for (int i = 0; i < batch1.size(); i++) {
+            Set<String> mergedSet = new HashSet<>(batch1.get(i));
+            mergedSet.addAll(batch2.get(i));
+            mergedList.add(mergedSet);
+        }
+
+        return mergedList;
     }
 
 	private void end() {

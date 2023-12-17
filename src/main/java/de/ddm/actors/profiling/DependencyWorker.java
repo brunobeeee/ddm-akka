@@ -42,8 +42,8 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	public static class TaskMessage implements Message {
 		private static final long serialVersionUID = -4667745204456518160L;
 		ActorRef<LargeMessageProxy.Message> dependencyMinerLargeMessageProxy;
-		List<String[]> sourceFile;
-		List<String[]> targetFile;
+		List<Set<String>> sourceFile;
+		List<Set<String>> targetFile;
 		int sourceFileIndex;
 		int targetFileIndex;
 	}
@@ -93,8 +93,8 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	}
 
 	private Behavior<Message> handle(TaskMessage message) {
-		List<String[]> sourceFile = message.getSourceFile();
-		List<String[]> targetFile = message.getTargetFile();
+		List<Set<String>> sourceFile = message.getSourceFile();
+		List<Set<String>> targetFile = message.getTargetFile();
 		int sourceFileIndex = message.getSourceFileIndex();
 		int targetFileIndex = message.getTargetFileIndex();
 
@@ -108,15 +108,11 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 			List<Integer> colIncIndexes = new ArrayList<>();
 
 			for (int j=0; j<targetFile.size(); j++) {
-				if (sourceFileIndex == targetFileIndex && i == j) {
-					// Do not compare columns with themselves
+				// Do not compare columns with themselves
+				if (sourceFileIndex == targetFileIndex && i == j)
 					continue;
-				}
 
-				List<String> sourceColumn = Arrays.asList(sourceFile.get(i));
-				Set<String> targetColumn = new HashSet<>(Arrays.asList(targetFile.get(j))); // Directly convert to HashSet as we dont need the actual values anymore
-
-				if (isSubset(sourceColumn, targetColumn)) {
+				if (isSubset(sourceFile.get(i), targetFile.get(j))) {
 					// Append the index of the targetColumn to signalize that sourceColumn has an IND to targetColumn
 					colIncIndexes.add(j);
 				}
@@ -130,7 +126,7 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 		return this;
 	}
 
-	public static boolean isSubset(List<String> list1, Set<String> list2) {
+	public static boolean isSubset(Set<String> list1, Set<String> list2) {
         for (String element : list1) {
             if (!list2.contains(element)) {
                 return false;
