@@ -42,10 +42,12 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	public static class TaskMessage implements Message {
 		private static final long serialVersionUID = -4667745204456518160L;
 		ActorRef<LargeMessageProxy.Message> dependencyMinerLargeMessageProxy;
-		List<Set<String>> sourceFile;
-		List<Set<String>> targetFile;
+		Set<String> sourceFile;
+		Set<String> targetFile;
 		int sourceFileIndex;
 		int targetFileIndex;
+		int sourceColumnIndex;
+		int targetColumnIndex;
 	}
 
 	////////////////////////
@@ -93,34 +95,26 @@ public class DependencyWorker extends AbstractBehavior<DependencyWorker.Message>
 	}
 
 	private Behavior<Message> handle(TaskMessage message) {
-		List<Set<String>> sourceFile = message.getSourceFile();
-		List<Set<String>> targetFile = message.getTargetFile();
+		Set<String> sourceFile = message.getSourceFile();
+		Set<String> targetFile = message.getTargetFile();
 		int sourceFileIndex = message.getSourceFileIndex();
+		int sourceColumnIndex = message.getSourceColumnIndex();
 		int targetFileIndex = message.getTargetFileIndex();
+		int targetColumnIndex = message.getTargetColumnIndex();
 
-		List<List<Integer>> result = new ArrayList<>();
+		Integer result = -1;
 
 		this.getContext().getLog().info("Working on sourceFile " + sourceFileIndex + " and targetFile " + targetFileIndex);
+		this.getContext().getLog().info("col " + sourceColumnIndex + " | col " + targetColumnIndex);
 
-		for (int i=0; i<sourceFile.size(); i++) {
-			// Initialize a new list per sourceColumn that saves the indexes of the targetColumns it has inclusion dependencies to
-			// e.g. if col 2 (sourceFile) has ind to col 4 (targetFile) then 4 gets added to the colIncIndexes on index 2 (sourceFile)
-			List<Integer> colIncIndexes = new ArrayList<>();
-
-			for (int j=0; j<targetFile.size(); j++) {
-				// Do not compare columns with themselves
-				if (sourceFileIndex == targetFileIndex && i == j)
-					continue;
-
-				if (isSubset(sourceFile.get(i), targetFile.get(j))) {
-					// Append the index of the targetColumn to signalize that sourceColumn has an IND to targetColumn
-					colIncIndexes.add(j);
-				}
+		if (sourceFileIndex != targetFileIndex || sourceColumnIndex != targetColumnIndex) {
+			if (isSubset(sourceFile, targetFile)) {
+				// Append the index of the targetColumn to signalize that sourceColumn has an IND to targetColumn
+				result = targetColumnIndex;
 			}
-			result.add(colIncIndexes);
 		}
 
-		LargeMessageProxy.LargeMessage completionMessage = new DependencyMiner.CompletionMessage(this.getContext().getSelf(), result, sourceFileIndex, targetFileIndex);
+		LargeMessageProxy.LargeMessage completionMessage = new DependencyMiner.CompletionMessage(this.getContext().getSelf(),result, sourceFileIndex, targetFileIndex, sourceColumnIndex, targetColumnIndex);
 		this.largeMessageProxy.tell(new LargeMessageProxy.SendMessage(completionMessage, message.getDependencyMinerLargeMessageProxy()));
 
 		return this;
