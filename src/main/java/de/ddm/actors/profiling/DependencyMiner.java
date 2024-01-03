@@ -20,8 +20,12 @@ import lombok.NoArgsConstructor;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 
 public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 
@@ -52,7 +56,7 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	public static class BatchMessage implements Message {
 		private static final long serialVersionUID = 4591192372652568030L;
 		int id;
-		List<String[]> batch;
+		List<Set<String>> batch;
 	}
 
 	@Getter
@@ -69,7 +73,11 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	public static class CompletionMessage implements Message {
 		private static final long serialVersionUID = -7642425159675583598L;
 		ActorRef<DependencyWorker.Message> dependencyWorker;
-		int result;
+		Integer result;
+		int sourceFileIndex;
+		int targetFileIndex;
+		int sourceColumnIndex;
+		int targetColumnIndex;
 	}
 
 	////////////////////////
@@ -90,6 +98,12 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		this.inputFiles = InputConfigurationSingleton.get().getInputFiles();
 		this.headerLines = new String[this.inputFiles.length][];
 
+		this.sourceFileIndex = 0;
+		this.targetFileIndex = 0;
+
+		this.batches = new ArrayList<>();
+		this.batchIds = new ArrayList<>();
+
 		this.inputReaders = new ArrayList<>(inputFiles.length);
 		for (int id = 0; id < this.inputFiles.length; id++)
 			this.inputReaders.add(context.spawn(InputReader.create(id, this.inputFiles[id]), InputReader.DEFAULT_NAME + "_" + id));
@@ -108,8 +122,27 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	private long startTime;
 
 	private final boolean discoverNaryDependencies;
+	
 	private final File[] inputFiles;
 	private final String[][] headerLines;
+
+	private List<List<Set<String>>> batches;
+	private List<Integer> batchIds;
+
+	// Tracking and Logging
+	private int filesRead = 0;
+	private int resultsRecieved = 0;
+
+	// Indexes to track wich file has to be compared to wich
+	private int sourceFileIndex;
+	private int targetFileIndex;
+
+	// Indexes to track wich column has to be compared to wich
+	private int sourceColumnIndex;
+	private int targetColumnIndex;
+
+	// Save the number of column combinations to determine stopping condition
+	private int colCombinations;
 
 	private final List<ActorRef<InputReader.Message>> inputReaders;
 	private final ActorRef<ResultCollector.Message> resultCollector;
@@ -148,10 +181,54 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	}
 
 	private Behavior<Message> handle(BatchMessage message) {
-		// Ignoring batch content for now ... but I could do so much with it.
+	
+		if (message.getBatch().size() != 0) {
 
-		if (message.getBatch().size() != 0)
+
+			// Check if batchId already exists
+			int existingIndex = batchIds.indexOf(message.getId());
+
+			if (existingIndex != -1) { // merge new batch with existing one
+				List<Set<String>> existingBatch = this.batches.get(existingIndex);
+				List<Set<String>> mergedBatch = mergeBatches(existingBatch, message.getBatch());
+				this.batches.set(existingIndex, mergedBatch);
+			} else { // add new batch at the end
+				this.batches.add(message.getBatch());
+				this.batchIds.add(message.getId());
+			}
+
 			this.inputReaders.get(message.getId()).tell(new InputReader.ReadBatchMessage(this.getContext().getSelf()));
+		} else {
+			filesRead += 1;
+			this.getContext().getLog().info(filesRead + " files read");
+
+			if (filesRead >= inputFiles.length) {
+				this.getContext().getLog().info("all files read");
+				this.getContext().getLog().info("==============");
+
+				// Calculate all combinations of cols for the stopping condition
+				for (int i=0; i<this.headerLines.length; i++) {
+					this.colCombinations += this.headerLines[i].length;
+				}
+				this.colCombinations = this.colCombinations * this.colCombinations -1;
+
+				// give every worker a task
+				for (ActorRef<DependencyWorker.Message> worker : this.dependencyWorkers) {
+					incFileIndexes();
+					if (sourceFileIndex >= batches.size()) // #task < #workers
+						break;
+					
+					worker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
+																	batches.get(this.sourceFileIndex).get(this.sourceColumnIndex),
+																	batches.get(this.targetFileIndex).get(this.targetColumnIndex),
+																	batchIds.get(this.sourceFileIndex),
+																	batchIds.get(this.targetFileIndex),
+																	this.sourceColumnIndex,
+																	this.targetColumnIndex));
+				}
+
+			}
+		}
 		return this;
 	}
 
@@ -160,42 +237,103 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 		if (!this.dependencyWorkers.contains(dependencyWorker)) {
 			this.dependencyWorkers.add(dependencyWorker);
 			this.getContext().watch(dependencyWorker);
-			// The worker should get some work ... let me send her something before I figure out what I actually want from her.
-			// I probably need to idle the worker for a while, if I do not have work for it right now ... (see master/worker pattern)
-
-			dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy, 42));
 		}
+
+		// Give worker the sourceFile, targetFile and their indexes for tracking
+		this.sourceFileIndex = 0;
+		this.targetFileIndex = 0;
+
+		// Worker will recieve its first taskMessage in handle(batchMessage)
 		return this;
 	}
 
 	private Behavior<Message> handle(CompletionMessage message) {
 		ActorRef<DependencyWorker.Message> dependencyWorker = message.getDependencyWorker();
-		// If this was a reasonable result, I would probably do something with it and potentially generate more work ... for now, let's just generate a random, binary IND.
+		int result = message.getResult();
+		int sourceBatchId = message.getSourceFileIndex();
+		int targetBatchId = message.getTargetFileIndex();
+		int sourceColumnIndex = message.getSourceColumnIndex();
+		int targetColumnIndex = message.getTargetColumnIndex();
 
 		if (this.headerLines[0] != null) {
-			Random random = new Random();
-			int dependent = random.nextInt(this.inputFiles.length);
-			int referenced = random.nextInt(this.inputFiles.length);
+			int dependent = sourceBatchId;
+			int referenced = targetBatchId;
 			File dependentFile = this.inputFiles[dependent];
 			File referencedFile = this.inputFiles[referenced];
-			String[] dependentAttributes = {this.headerLines[dependent][random.nextInt(this.headerLines[dependent].length)], this.headerLines[dependent][random.nextInt(this.headerLines[dependent].length)]};
-			String[] referencedAttributes = {this.headerLines[referenced][random.nextInt(this.headerLines[referenced].length)], this.headerLines[referenced][random.nextInt(this.headerLines[referenced].length)]};
-			InclusionDependency ind = new InclusionDependency(dependentFile, dependentAttributes, referencedFile, referencedAttributes);
-			List<InclusionDependency> inds = new ArrayList<>(1);
-			inds.add(ind);
+			List<InclusionDependency> inds = new ArrayList<>();
 
-			this.resultCollector.tell(new ResultCollector.ResultMessage(inds));
+			if (result >= 0) { // -> a real result
+				String[] dependentAttributes = {this.headerLines[dependent][sourceColumnIndex]};
+				String[] referencedAttributes = {this.headerLines[referenced][targetColumnIndex]};
+
+				// Write down inclusion dependency
+				InclusionDependency ind = new InclusionDependency(dependentFile, dependentAttributes, referencedFile, referencedAttributes);
+				inds.add(ind);
+			}
+
+			if (inds.size() > 0)
+				this.resultCollector.tell(new ResultCollector.ResultMessage(inds));
 		}
-		// I still don't know what task the worker could help me to solve ... but let me keep her busy.
-		// Once I found all unary INDs, I could check if this.discoverNaryDependencies is set to true and try to detect n-ary INDs as well!
 
-		dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy, 42));
+		this.resultsRecieved++;
+		this.getContext().getLog().info("Recieved result " + this.resultsRecieved + "/" + colCombinations + " from sourceFile " + message.sourceFileIndex + " and targetFile " + message.targetFileIndex);
 
-		// At some point, I am done with the discovery. That is when I should call my end method. Because I do not work on a completable task yet, I simply call it after some time.
-		if (System.currentTimeMillis() - this.startTime > 2000000)
+
+		try { // With more workers the function sometimes throws an indexOutOfBoundsError bc the critical section is not locked; we just catch the error in this case bc it means we are done with the calculation
+			incFileIndexes();
+		} catch (Exception e) {}
+
+		// send new task if not done
+		if (this.sourceFileIndex < batches.size()) {
+			this.getContext().getLog().info("-------------------");
+					dependencyWorker.tell(new DependencyWorker.TaskMessage(this.largeMessageProxy,
+																	batches.get(this.sourceFileIndex).get(this.sourceColumnIndex),
+																	batches.get(this.targetFileIndex).get(this.targetColumnIndex),
+																	batchIds.get(this.sourceFileIndex),
+																	batchIds.get(this.targetFileIndex),
+																	this.sourceColumnIndex,
+																	this.targetColumnIndex));
+		}
+
+		// stopping condition
+		if (resultsRecieved >= this.colCombinations)
 			this.end();
 		return this;
 	}
+
+	// increment the file indexes such that every file gets compared with every other file
+	private void incFileIndexes() {
+		this.targetColumnIndex++;
+		if (this.targetColumnIndex >= batches.get(this.targetFileIndex).size()) { // no more target files to read
+			this.targetColumnIndex = 0;
+			this.sourceColumnIndex++;
+		}
+
+		if (sourceColumnIndex >= batches.get(sourceFileIndex).size()) {
+			this.sourceColumnIndex = 0;
+			this.targetFileIndex++;
+			if (this.targetFileIndex >= batches.size()) { // no more target files to read
+				this.targetFileIndex = 0;
+				this.sourceFileIndex++;
+			}
+		}
+	}
+
+	public static List<Set<String>> mergeBatches(List<Set<String>> batch1, List<Set<String>> batch2) {
+        if (batch1.size() != batch2.size()) {
+            throw new IllegalArgumentException("The lists do not have the same dimension.");
+        }
+
+        List<Set<String>> mergedList = new ArrayList<>();
+
+        for (int i = 0; i < batch1.size(); i++) {
+            Set<String> mergedSet = new HashSet<>(batch1.get(i));
+            mergedSet.addAll(batch2.get(i));
+            mergedList.add(mergedSet);
+        }
+
+        return mergedList;
+    }
 
 	private void end() {
 		this.resultCollector.tell(new ResultCollector.FinalizeMessage());
@@ -206,6 +344,7 @@ public class DependencyMiner extends AbstractBehavior<DependencyMiner.Message> {
 	private Behavior<Message> handle(Terminated signal) {
 		ActorRef<DependencyWorker.Message> dependencyWorker = signal.getRef().unsafeUpcast();
 		this.dependencyWorkers.remove(dependencyWorker);
+
 		return this;
 	}
 }
