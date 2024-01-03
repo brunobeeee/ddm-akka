@@ -1,3 +1,6 @@
+# IMPORTANT!
+Please run the **workers** before the **master**! 
+
 # ddm-akka
 Akka example and homework code for the "Big Data Systems" lecture.
 
